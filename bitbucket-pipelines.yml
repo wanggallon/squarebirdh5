@@ -1,0 +1,50 @@
+clone:
+  depth: full
+  lfs: true
+
+# Reusable steps code (by using the '<<: *step-name' operator below)
+deploy-to-test-server-step: &deploy-to-test-server-step
+  - step:
+        name: Deploy to test server
+        image: node:14.1.0
+        caches:
+          - node
+        script:
+          - mkdir -p ~/.ssh
+          - cat support/my_known_hosts >> ~/.ssh/known_hosts
+          - (umask  077 ; echo $TEST_SERVER_SSH_KEY | base64 --decode > ~/.ssh/server_ssh_key)
+          - npm config set unsafe-perm true
+          - npm install
+          - npm run build
+          - eval `ssh-agent`
+          - ssh-add ~/.ssh/server_ssh_key
+          - ssh $TEST_SERVER_USER@$TEST_SERVER_ADDRESS "mkdir -p $TEST_SERVER_DEPLOY_PATH/$BITBUCKET_REPO_SLUG-builds"
+          - scp -r ./dist $TEST_SERVER_USER@$TEST_SERVER_ADDRESS:$TEST_SERVER_DEPLOY_PATH/$BITBUCKET_REPO_SLUG-builds/$BITBUCKET_COMMIT
+          - ssh $TEST_SERVER_USER@$TEST_SERVER_ADDRESS "rm $TEST_SERVER_DEPLOY_PATH/$BITBUCKET_REPO_SLUG && ln -s $TEST_SERVER_DEPLOY_PATH/$BITBUCKET_REPO_SLUG-builds/$BITBUCKET_COMMIT $TEST_SERVER_DEPLOY_PATH/$BITBUCKET_REPO_SLUG"
+          - echo "Test Version Deployed"
+deploy-to-facebook-step: &deploy-to-facebook-step
+  - step:
+      name: Deploy to Facebook Instant Games Web Hosting
+      image: node:14.1.0
+      caches:
+        - node
+      script:
+        - apt-get update && apt-get install --yes zip
+        - npm config set unsafe-perm true
+        - npm install
+        - npm run build:facebook
+        - cd dist; zip -r ./bundle.zip *
+        - curl -X POST https://graph-video.facebook.com/"$FB_APP_ID"/assets -F 'access_token='"$FB_ACCESS_TOKEN" -F 'type=BUNDLE' -F 'asset=@./bundle.zip' -F 'comment='"$BITBUCKET_COMMIT"
+        - echo "Facebook Build Uploaded"
+
+pipelines:
+  custom:
+    facebook-deploy:
+      - <<: *deploy-to-facebook-step
+  branches:
+    develop:
+      - <<: *deploy-to-test-server-step
+    fb-deploy:
+      - <<: *deploy-to-facebook-step
+    master:
+      - <<: *deploy-to-facebook-step
